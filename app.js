@@ -4,6 +4,10 @@
 
 const TZ = 'America/Sao_Paulo';
 const REFRESH_MS = 5 * 60 * 1000;
+// Collector cadence (pg_cron */15) and the silence after which it counts as late; same
+// rule as the collector-health endpoint.
+const COLLECT_EVERY_MIN = 15;
+const COLLECT_LATE_MIN = 35;
 // Brazil has had no daylight saving time since 2019, so a day in Brasília is a fixed
 // -03:00 window.
 const BRASILIA_OFFSET = '-03:00';
@@ -19,6 +23,9 @@ const state = {
   map: null,
   layer: null,        // markers/paths currently drawn
   refreshTimer: null,
+  // Bumped on every draw; a response belonging to an older draw is dropped, so clicking
+  // quickly between people never paints one person's day under another's name.
+  drawSeq: 0,
 };
 
 // ---------- formatting ----------
@@ -28,6 +35,20 @@ const dateTimeFmt = new Intl.DateTimeFormat('pt-BR', {
 });
 const timeFmt = new Intl.DateTimeFormat('pt-BR', { timeZone: TZ, hour: '2-digit', minute: '2-digit' });
 const dayFmt = new Intl.DateTimeFormat('en-CA', { timeZone: TZ }); // yyyy-mm-dd
+const dayLabelFmt = new Intl.DateTimeFormat('pt-BR', {
+  timeZone: TZ, weekday: 'long', day: '2-digit', month: '2-digit',
+});
+
+// "2026-10-20" -> "20/10, segunda-feira". Noon keeps the date safe from the offset.
+function dayLabel(day) {
+  const parts = dayLabelFmt.formatToParts(new Date(`${day}T12:00:00${BRASILIA_OFFSET}`));
+  const get = (type) => parts.find((p) => p.type === type)?.value;
+  return `${get('day')}/${get('month')}, ${get('weekday')}`;
+}
+
+function today() {
+  return dayFmt.format(new Date());
+}
 
 function ago(iso) {
   const min = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
@@ -64,12 +85,15 @@ function el(tag, attrs = {}, ...children) {
 // ---------- data ----------
 
 async function loadDevices() {
-  const [devices, latest, runs] = await Promise.all([
+  const [devices, latest, runs, okRuns] = await Promise.all([
     db.from('devices').select('id, model, imei, collaborator, mdm_tags, online_status, last_contact_at'),
     db.from('latest_positions').select('device_id, fix_time, latitude, longitude, provider'),
     db.from('collector_runs').select('started_at, error').order('id', { ascending: false }).limit(1),
+    db.from('collector_runs').select('finished_at')
+      .is('error', null).not('finished_at', 'is', null)
+      .order('finished_at', { ascending: false }).limit(1),
   ]);
-  const failed = [devices, latest, runs].find((r) => r.error);
+  const failed = [devices, latest, runs, okRuns].find((r) => r.error);
   if (failed) throw failed.error;
 
   const byDevice = new Map(latest.data.map((p) => [p.device_id, p]));
@@ -77,10 +101,41 @@ async function loadDevices() {
     .map((d) => ({ ...d, latest: byDevice.get(d.id) || null }))
     .sort((a, b) => deviceName(a).localeCompare(deviceName(b), 'pt-BR', { sensitivity: 'base' }));
 
-  const lastRun = runs.data[0];
-  $('collector-status').textContent = lastRun
-    ? `Última coleta: ${dateTimeFmt.format(new Date(lastRun.started_at))}${lastRun.error ? ' (com erro)' : ''}`
-    : 'Nenhuma coleta registrada ainda.';
+  renderCollectorStatus(runs.data[0], okRuns.data[0]);
+}
+
+// Header line that tells the directors whether what they see is current: when the
+// collector last ran, when it runs next, and loudly when it is late or failing.
+function renderCollectorStatus(lastRun, lastOk) {
+  const status = $('collector-status');
+  status.className = 'collector-status';
+  status.title = `O portal busca as posições no MDM a cada ${COLLECT_EVERY_MIN} minutos.`;
+  if (!lastRun) {
+    status.textContent = 'Nenhuma coleta registrada ainda';
+    status.classList.add('late');
+    return;
+  }
+
+  const lastOkAt = lastOk ? new Date(lastOk.finished_at) : null;
+  const silentMin = lastOkAt ? (Date.now() - lastOkAt.getTime()) / 60000 : Infinity;
+  if (silentMin > COLLECT_LATE_MIN) {
+    status.textContent = lastOkAt
+      ? `Coleta atrasada · última às ${timeFmt.format(lastOkAt)}`
+      : 'Coleta sem sucesso até agora';
+    status.classList.add('late');
+    return;
+  }
+
+  const startedAt = new Date(lastRun.started_at);
+  if (lastRun.error) {
+    status.textContent = `Última coleta com erro · ${timeFmt.format(startedAt)}`;
+    status.classList.add('failed');
+    return;
+  }
+
+  const slot = COLLECT_EVERY_MIN * 60000;
+  const next = new Date(Math.floor(startedAt.getTime() / slot) * slot + slot);
+  status.textContent = `Coleta às ${timeFmt.format(startedAt)} · próxima ~${timeFmt.format(next)}`;
 }
 
 async function loadDay(deviceId, day) {
@@ -142,9 +197,29 @@ function fit(points) {
   else if (points.length > 1) state.map.fitBounds(points, { padding: [40, 40], maxZoom: 17 });
 }
 
+function showNotice(title, text, action) {
+  $('map-notice-title').textContent = title;
+  $('map-notice-text').textContent = text;
+  const button = $('map-notice-action');
+  button.hidden = !action;
+  if (action) {
+    button.textContent = action.label;
+    button.onclick = action.onClick;
+  }
+  $('map-notice').hidden = false;
+  $('map').parentElement.classList.add('dimmed');
+}
+
+function hideNotice() {
+  $('map-notice').hidden = true;
+  $('map').parentElement.classList.remove('dimmed');
+}
+
 function showAll() {
   state.selectedId = null;
+  state.drawSeq += 1; // a day still loading must not land on the overview
   $('toolbar').hidden = true;
+  hideNotice();
   renderList();
   clearMap();
   const points = [];
@@ -160,31 +235,43 @@ function showAll() {
   fit(points);
 }
 
+function setSummary(text, isError = false) {
+  const summary = $('day-summary');
+  summary.textContent = text;
+  summary.classList.toggle('error-text', isError);
+}
+
 async function selectDevice(id) {
   state.selectedId = id;
   renderList();
   const d = state.devices.find((x) => x.id === id);
   $('toolbar').hidden = false;
   $('selected-name').textContent = deviceName(d);
-  await drawDay(d);
+  await drawDayOrReport(d);
 }
 
-async function drawDay(d) {
+async function drawDayOrReport(d, options) {
+  try {
+    await drawDay(d, options);
+  } catch (err) {
+    console.error(err);
+    setSummary('Não foi possível carregar o trajeto. Tente de novo em instantes.', true);
+  }
+}
+
+// keepView: background refresh of the day on screen; redraw without moving the map or
+// popping a popup over what the director is looking at.
+async function drawDay(d, { keepView = false } = {}) {
+  const seq = ++state.drawSeq;
   const day = $('day').value;
-  $('day-summary').textContent = 'Carregando…';
+  if (!keepView) setSummary('Carregando…');
   const positions = await loadDay(d.id, day);
+  if (seq !== state.drawSeq) return;
   clearMap();
+  hideNotice();
 
   if (positions.length === 0) {
-    // Nothing that day: still answer "where is it?" with the last known fix.
-    $('day-summary').textContent = d.latest
-      ? `Nenhuma posição neste dia. Mostrando a última conhecida (${ago(d.latest.fix_time)}).`
-      : 'Este aparelho ainda não reportou posição.';
-    if (d.latest) {
-      const ll = [d.latest.latitude, d.latest.longitude];
-      L.marker(ll).bindPopup(() => popupContent(d, d.latest, 'Última posição')).addTo(state.layer).openPopup();
-      fit([ll]);
-    }
+    drawEmptyDay(d, day);
     return;
   }
 
@@ -198,13 +285,51 @@ async function drawDay(d) {
     marker.bindPopup(() => popupContent(d, p, last ? 'Última posição do dia' : 'Posição'))
       .bindTooltip(timeFmt.format(new Date(p.fix_time)))
       .addTo(state.layer);
-    if (last) marker.openPopup();
+    if (last && !keepView) marker.openPopup();
   });
-  fit(points);
+  if (!keepView) fit(points);
 
   const first = timeFmt.format(new Date(positions[0].fix_time));
   const lastTime = timeFmt.format(new Date(positions[positions.length - 1].fix_time));
-  $('day-summary').textContent = `${positions.length} posição(ões) entre ${first} e ${lastTime}`;
+  setSummary(positions.length === 1
+    ? `1 posição às ${first}`
+    : `${positions.length} posições entre ${first} e ${lastTime}`);
+}
+
+// A day without positions must read as "no data for that day". Drawing the last known
+// fix as a normal pin would answer "was he there that day?" with a position from another
+// date, so it is only shown on request, hollow and labelled with its own date.
+function drawEmptyDay(d, day) {
+  const isToday = day === today();
+  setSummary(isToday ? 'Nenhuma posição hoje até agora' : 'Nenhuma posição neste dia');
+
+  const title = isToday ? 'Nenhuma posição hoje até agora' : `Nenhuma posição em ${dayLabel(day)}`;
+  if (!d.latest) {
+    showNotice(title, 'Este vendedor ainda não enviou nenhuma posição.');
+    return;
+  }
+  const latestAt = new Date(d.latest.fix_time);
+  showNotice(
+    title,
+    `A última posição conhecida é de ${dateTimeFmt.format(latestAt)} (${ago(d.latest.fix_time)}).`,
+    { label: 'Mostrar última posição conhecida', onClick: () => showLastKnown(d) },
+  );
+}
+
+function showLastKnown(d) {
+  hideNotice();
+  const latestAt = new Date(d.latest.fix_time);
+  const ll = [d.latest.latitude, d.latest.longitude];
+  L.circleMarker(ll, {
+    radius: 9, color: '#8a929b', weight: 3, fillColor: '#ffffff', fillOpacity: 1, dashArray: '4 3',
+  })
+    .bindTooltip(`Última conhecida · ${dateTimeFmt.format(latestAt)}`, {
+      permanent: true, direction: 'top', offset: [0, -10], className: 'stale-label',
+    })
+    .bindPopup(() => popupContent(d, d.latest, 'Última posição conhecida'))
+    .addTo(state.layer);
+  fit([ll]);
+  setSummary(`Nenhuma posição neste dia · mostrando a última conhecida, de ${dateTimeFmt.format(latestAt)}`);
 }
 
 // ---------- session ----------
@@ -215,12 +340,19 @@ function showError(err) {
   $('devices-status').textContent = `Erro ao carregar os dados: ${err.message || err}`;
 }
 
+// Every 5 min: list, collector status and, when today's path is open, the path too.
+// Past days do not change, so they are left alone.
 async function refresh() {
   try {
     await loadDevices();
     renderList();
   } catch (err) {
     showError(err);
+    return;
+  }
+  const d = state.devices.find((x) => x.id === state.selectedId);
+  if (d && $('day').value === today() && $('map-notice').hidden) {
+    await drawDayOrReport(d, { keepView: true });
   }
 }
 
@@ -228,7 +360,8 @@ async function startApp(session) {
   $('login').hidden = true;
   $('app').hidden = false;
   $('user-email').textContent = session.user.email;
-  $('day').value = dayFmt.format(new Date());
+  $('day').value = today();
+  $('day').max = today(); // no positions exist in the future
 
   if (!state.map) {
     state.map = L.map('map').setView([-25.43, -49.27], 11);
@@ -313,8 +446,9 @@ $('login-form').addEventListener('submit', async (e) => {
 $('logout').addEventListener('click', () => db.auth.signOut());
 $('show-all').addEventListener('click', showAll);
 $('day').addEventListener('change', () => {
+  if (!$('day').value || $('day').value > today()) $('day').value = today();
   const d = state.devices.find((x) => x.id === state.selectedId);
-  if (d) drawDay(d).catch(showError);
+  if (d) drawDayOrReport(d);
 });
 
 db.auth.onAuthStateChange((_event, session) => {

@@ -9,7 +9,7 @@
   <title>Rastreamento Ruffino</title>
   <link rel="icon" type="image/svg+xml" href="logo-ruffino.svg">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="styles.css?v=8288838">
+  <link rel="stylesheet" href="styles.css?v=eb847a2">
 </head>
 <body>
   <section id="login" class="login" hidden>
@@ -24,7 +24,7 @@
         <label>Senha <input id="login-password" type="password" autocomplete="current-password"></label>
         <button type="submit" class="secondary">Entrar com senha</button>
       </div>
-      <p id="login-error" class="error" hidden></p>
+      <p id="login-error" class="error" role="alert" hidden></p>
     </form>
   </section>
 
@@ -35,6 +35,7 @@
         <strong>Portal de Rastreamento</strong>
       </span>
       <span class="topbar-right">
+        <span id="collector-status" class="collector-status" role="status"></span>
         <span id="user-email" class="muted"></span>
         <button id="logout" class="link-button" type="button">Sair</button>
       </span>
@@ -45,24 +46,35 @@
         <h2>Aparelhos</h2>
         <button id="show-all" class="link-button" type="button">Ver todos no mapa</button>
       </div>
-      <p id="devices-status" class="muted">Carregando…</p>
+      <ul class="legend" aria-label="Legenda das cores">
+        <li><span class="dot fresh"></span>Posição de até 30 min</li>
+        <li><span class="dot stale"></span>Até 24 h</li>
+        <li><span class="dot old"></span>Mais antiga</li>
+      </ul>
+      <p id="devices-status" class="muted" role="status">Carregando…</p>
       <ul id="device-list" class="device-list"></ul>
-      <p id="collector-status" class="muted small"></p>
     </aside>
 
     <main class="main">
       <div id="toolbar" class="toolbar" hidden>
         <strong id="selected-name"></strong>
         <label>Dia <input id="day" type="date"></label>
-        <span id="day-summary" class="muted"></span>
+        <span id="day-summary" class="muted" aria-live="polite"></span>
       </div>
-      <div id="map" class="map"></div>
+      <div class="map-wrap">
+        <div id="map" class="map"></div>
+        <div id="map-notice" class="map-notice" role="status" hidden>
+          <strong id="map-notice-title"></strong>
+          <p id="map-notice-text"></p>
+          <button id="map-notice-action" type="button" class="secondary" hidden></button>
+        </div>
+      </div>
     </main>
   </section>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js"></script>
-  <script src="config.js?v=8288838"></script>
-  <script src="app.js?v=8288838"></script>
+  <script src="config.js?v=eb847a2"></script>
+  <script src="app.js?v=eb847a2"></script>
 </body>
 </html>

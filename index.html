@@ -7,13 +7,15 @@
        OpenStreetMap blocks tile requests from web pages that send no Referer at all. -->
   <meta name="referrer" content="strict-origin-when-cross-origin">
   <title>Rastreamento Ruffino</title>
+  <link rel="icon" type="image/svg+xml" href="logo-ruffino.svg">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <section id="login" class="login" hidden>
     <form id="login-form" class="login-card">
-      <h1>Rastreamento Ruffino</h1>
+      <img class="login-logo" src="logo-ruffino.svg" alt="Ruffino Acabamentos">
+      <h1>Portal de Rastreamento</h1>
       <p class="muted">Acesso restrito à diretoria.</p>
       <button id="login-microsoft" type="button">Entrar com Microsoft</button>
       <div id="password-login" class="password-login" hidden>
@@ -28,7 +30,10 @@
 
   <section id="app" class="app" hidden>
     <header class="topbar">
-      <strong>Rastreamento Ruffino</strong>
+      <span class="brand">
+        <img class="brand-logo" src="logo-ruffino.svg" alt="Ruffino Acabamentos">
+        <strong>Portal de Rastreamento</strong>
+      </span>
       <span class="topbar-right">
         <span id="user-email" class="muted"></span>
         <button id="logout" class="link-button" type="button">Sair</button>

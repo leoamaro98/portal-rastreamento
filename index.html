@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- GitHub Pages ignores _headers, so the referrer rule also lives here. -->
+  <meta name="referrer" content="no-referrer">
+  <title>Rastreamento Ruffino</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <section id="login" class="login" hidden>
+    <form id="login-form" class="login-card">
+      <h1>Rastreamento Ruffino</h1>
+      <p class="muted">Acesso restrito à diretoria.</p>
+      <button id="login-microsoft" type="button">Entrar com Microsoft</button>
+      <div id="password-login" class="password-login" hidden>
+        <p class="muted small">Acesso de teste (somente ambiente local)</p>
+        <label>E-mail <input id="login-email" type="email" autocomplete="username"></label>
+        <label>Senha <input id="login-password" type="password" autocomplete="current-password"></label>
+        <button type="submit" class="secondary">Entrar com senha</button>
+      </div>
+      <p id="login-error" class="error" hidden></p>
+    </form>
+  </section>
+
+  <section id="app" class="app" hidden>
+    <header class="topbar">
+      <strong>Rastreamento Ruffino</strong>
+      <span class="topbar-right">
+        <span id="user-email" class="muted"></span>
+        <button id="logout" class="link-button" type="button">Sair</button>
+      </span>
+    </header>
+
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <h2>Aparelhos</h2>
+        <button id="show-all" class="link-button" type="button">Ver todos no mapa</button>
+      </div>
+      <p id="devices-status" class="muted">Carregando…</p>
+      <ul id="device-list" class="device-list"></ul>
+      <p id="collector-status" class="muted small"></p>
+    </aside>
+
+    <main class="main">
+      <div id="toolbar" class="toolbar" hidden>
+        <strong id="selected-name"></strong>
+        <label>Dia <input id="day" type="date"></label>
+        <span id="day-summary" class="muted"></span>
+      </div>
+      <div id="map" class="map"></div>
+    </main>
+  </section>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

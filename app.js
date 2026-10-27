@@ -276,6 +276,18 @@ function loginError(message) {
 
 $('password-login').hidden = !window.APP_CONFIG.passwordLogin;
 
+// A failed Microsoft login comes back to this page with the reason in the URL (query or
+// hash). Without showing it, the person just lands on the login card again, puzzled.
+function showReturnedLoginError() {
+  const params = new URLSearchParams(window.location.search);
+  new URLSearchParams(window.location.hash.slice(1)).forEach((v, k) => params.set(k, v));
+  const description = params.get('error_description') || params.get('error');
+  if (!description) return;
+  loginError(`O login não foi concluído: ${description.replace(/\+/g, ' ')}`);
+  history.replaceState(null, '', window.location.pathname);
+}
+showReturnedLoginError();
+
 // Microsoft returns to this same page; supabase-js reads the session from the URL and
 // onAuthStateChange takes it from there. The path matters: on GitHub Pages the portal
 // lives under /<repo>/, not at the site root.

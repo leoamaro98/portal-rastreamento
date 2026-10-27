@@ -26,6 +26,8 @@ const state = {
   // Bumped on every draw; a response belonging to an older draw is dropped, so clicking
   // quickly between people never paints one person's day under another's name.
   drawSeq: 0,
+  stopMarkers: [],    // map markers, same order as the timeline
+  activeStop: null,
 };
 
 // ---------- formatting ----------
@@ -194,7 +196,7 @@ function clearMap() {
 
 function fit(points) {
   if (points.length === 1) state.map.setView(points[0], 16);
-  else if (points.length > 1) state.map.fitBounds(points, { padding: [40, 40], maxZoom: 17 });
+  else if (points.length > 1) state.map.fitBounds(points, { padding: [56, 56], maxZoom: 17 });
 }
 
 function showNotice(title, text, action) {
@@ -220,6 +222,7 @@ function showAll() {
   state.drawSeq += 1; // a day still loading must not land on the overview
   $('toolbar').hidden = true;
   hideNotice();
+  hideTimeline();
   renderList();
   clearMap();
   const points = [];
@@ -271,29 +274,212 @@ async function drawDay(d, { keepView = false } = {}) {
   hideNotice();
 
   if (positions.length === 0) {
+    hideTimeline();
     drawEmptyDay(d, day);
     return;
   }
 
-  const points = positions.map((p) => [p.latitude, p.longitude]);
-  L.polyline(points, { color: '#1f5fa8', weight: 3, opacity: 0.7 }).addTo(state.layer);
-  positions.forEach((p, i) => {
-    const last = i === positions.length - 1;
-    const marker = last
-      ? L.marker(points[i])
-      : L.circleMarker(points[i], { radius: 5, color: '#1f5fa8', fillColor: '#fff', fillOpacity: 1, weight: 2 });
-    marker.bindPopup(() => popupContent(d, p, last ? 'Última posição do dia' : 'Posição'))
-      .bindTooltip(timeFmt.format(new Date(p.fix_time)))
-      .addTo(state.layer);
-    if (last && !keepView) marker.openPopup();
-  });
-  if (!keepView) fit(points);
+  const stops = window.Stops.buildStops(positions);
+  const keepActive = keepView && state.activeStop !== null && state.activeStop < stops.length - 1
+    ? state.activeStop
+    : stops.length - 1;
+  renderTimeline(d, stops);
+  drawStopsOnMap(d, stops);
+  selectStop(keepActive, { pan: false });
+  if (!keepView) fit(stops.map((s) => [s.latitude, s.longitude]));
 
-  const first = timeFmt.format(new Date(positions[0].fix_time));
-  const lastTime = timeFmt.format(new Date(positions[positions.length - 1].fix_time));
-  setSummary(positions.length === 1
-    ? `1 posição às ${first}`
-    : `${positions.length} posições entre ${first} e ${lastTime}`);
+  const first = timeFmt.format(new Date(stops[0].from));
+  const lastTime = timeFmt.format(new Date(stops[stops.length - 1].to));
+  const km = Math.round(window.Stops.totalDistanceM(stops) / 1000);
+  setSummary(stops.length === 1
+    ? `1 local · ${first === lastTime ? first : `${first} → ${lastTime}`}`
+    : `${stops.length} locais · ${first} → ${lastTime} · ~${km} km em linha reta`);
+}
+
+// ---------- timeline ----------
+
+function durationLabel(fromIso, toIso) {
+  const min = Math.round((new Date(toIso) - new Date(fromIso)) / 60000);
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m ? `${h} h ${m} min` : `${h} h`;
+}
+
+function kmLabel(meters) {
+  return `${(meters / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} km`;
+}
+
+// What happened at a stop, in the directors' words.
+function describeStop(stop, index) {
+  const parked = stop.count > 1 && stop.to !== stop.from;
+  const time = parked
+    ? `${timeFmt.format(new Date(stop.from))} – ${timeFmt.format(new Date(stop.to))}`
+    : timeFmt.format(new Date(stop.from));
+  let what;
+  if (parked) {
+    what = `Parado ${durationLabel(stop.from, stop.to)} · ${stop.count} posições`;
+    if (index === 0) what = `Início do dia · ${what.charAt(0).toLowerCase()}${what.slice(1)}`;
+  } else {
+    what = index === 0 ? 'Início do dia' : `Passagem · ${kmLabel(stop.fromPreviousM)} do anterior`;
+  }
+  return { time, what };
+}
+
+function renderTimeline(d, stops) {
+  const list = $('timeline');
+  list.replaceChildren();
+  stops.forEach((stop, i) => {
+    const { time, what } = describeStop(stop, i);
+    const where = el('span', { className: 'stop-where' }, 'Buscando endereço…');
+    const button = el('button', { type: 'button', className: 'stop' },
+      el('span', { className: 'stop-badge', ariaHidden: 'true' }, String(i + 1)),
+      el('span', {},
+        el('span', { className: 'stop-time' }, time),
+        el('span', { className: 'stop-what' }, what),
+        where),
+    );
+    button.addEventListener('click', () => selectStop(i, { pan: true }));
+    list.append(el('li', {}, button));
+    fillAddress(where, stop);
+  });
+  const lastAt = timeFmt.format(new Date(stops[stops.length - 1].to));
+  list.append(el('li', { className: 'timeline-end' }, `Sem posições depois de ${lastAt}`));
+  list.hidden = false;
+  $('day-view').classList.add('with-timeline');
+  setTimeout(() => state.map.invalidateSize(), 0);
+}
+
+function hideTimeline() {
+  $('timeline').hidden = true;
+  $('timeline').replaceChildren();
+  $('day-view').classList.remove('with-timeline');
+  state.stopMarkers = [];
+  state.activeStop = null;
+  setTimeout(() => state.map && state.map.invalidateSize(), 0);
+}
+
+// Straight dashed lines: with fixes minutes apart the real route is unknown, and a solid
+// line would suggest one.
+function drawStopsOnMap(d, stops) {
+  const points = stops.map((s) => [s.latitude, s.longitude]);
+  if (points.length > 1) {
+    L.polyline(points, { color: '#66727f', weight: 2, opacity: 0.8, dashArray: '6 6' }).addTo(state.layer);
+  }
+  state.stopMarkers = stops.map((stop, i) => {
+    const { time } = describeStop(stop, i);
+    const marker = L.marker(points[i], {
+      icon: L.divIcon({ className: 'stop-icon', html: `<span>${i + 1}</span>`, iconSize: [26, 26], iconAnchor: [13, 13] }),
+      keyboard: false, // the timeline buttons are the keyboard path
+      title: `${i + 1} · ${time}`,
+    })
+      .bindPopup(() => popupContent(d, { ...stop, fix_time: stop.to, provider: null }, time))
+      .on('click', () => selectStop(i, { pan: false, scroll: true }))
+      .addTo(state.layer);
+    return marker;
+  });
+}
+
+function selectStop(index, { pan = false, scroll = false } = {}) {
+  state.activeStop = index;
+  const buttons = [...$('timeline').querySelectorAll('.stop')];
+  buttons.forEach((b, i) => {
+    b.classList.toggle('active', i === index);
+    if (i === index) b.setAttribute('aria-current', 'true');
+    else b.removeAttribute('aria-current');
+  });
+  state.stopMarkers.forEach((m, i) => {
+    const icon = m.getElement();
+    if (icon) icon.classList.toggle('active', i === index);
+    m.setZIndexOffset(i === index ? 1000 : 0);
+  });
+  const marker = state.stopMarkers[index];
+  if (pan && marker) state.map.panTo(marker.getLatLng());
+  if (scroll && buttons[index]) buttons[index].scrollIntoView({ block: 'nearest' });
+}
+
+// ---------- approximate address (OpenStreetMap Nominatim) ----------
+// Nominatim's free service allows at most one request per second and asks clients to
+// cache, so lookups are queued and remembered per browser.
+
+const GEOCODE_GAP_MS = 1100;
+const addressMemory = new Map();
+let geocodeQueue = Promise.resolve();
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function cachedAddress(key) {
+  if (addressMemory.has(key)) return addressMemory.get(key);
+  try {
+    return localStorage.getItem(`addr:${key}`);
+  } catch {
+    return null;
+  }
+}
+
+function rememberAddress(key, text) {
+  addressMemory.set(key, text);
+  try {
+    localStorage.setItem(`addr:${key}`, text);
+  } catch {
+    // Private mode or full storage: the in-memory copy is enough for this visit.
+  }
+}
+
+function formatAddress(a) {
+  const street = [a.road || a.pedestrian || a.footway, a.house_number].filter(Boolean).join(', ');
+  const area = [a.suburb || a.neighbourhood || a.quarter, a.city || a.town || a.village || a.municipality]
+    .filter(Boolean).join(', ');
+  return [street, area].filter(Boolean).join(' · ');
+}
+
+function lookupAddress(lat, lng) {
+  const key = `${lat.toFixed(4)},${lng.toFixed(4)}`;
+  const hit = cachedAddress(key);
+  if (hit) return Promise.resolve(hit);
+  const job = geocodeQueue.then(async () => {
+    const again = cachedAddress(key);
+    if (again) return again;
+    const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&accept-language=pt-BR&lat=${lat}&lon=${lng}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json();
+    const text = formatAddress(json.address || {}) || json.display_name || '';
+    if (text) rememberAddress(key, text);
+    return text;
+  });
+  geocodeQueue = job.then(() => sleep(GEOCODE_GAP_MS), () => sleep(GEOCODE_GAP_MS));
+  return job;
+}
+
+async function fillAddress(span, stop) {
+  try {
+    const text = await lookupAddress(stop.latitude, stop.longitude);
+    if (span.isConnected) span.textContent = text ? `Aprox. ${text}` : 'Endereço indisponível';
+  } catch {
+    if (span.isConnected) span.textContent = 'Endereço indisponível';
+  }
+}
+
+// ---------- day navigation ----------
+
+function shiftDay(delta) {
+  const [y, m, dd] = $('day').value.split('-').map(Number);
+  const next = new Date(Date.UTC(y, m - 1, dd + delta)).toISOString().slice(0, 10);
+  if (next > today()) return;
+  $('day').value = next;
+  onDayChanged();
+}
+
+function updateDayButtons() {
+  $('day-next').disabled = $('day').value >= today();
+}
+
+function onDayChanged() {
+  if (!$('day').value || $('day').value > today()) $('day').value = today();
+  updateDayButtons();
+  const d = state.devices.find((x) => x.id === state.selectedId);
+  if (d) drawDayOrReport(d);
 }
 
 // A day without positions must read as "no data for that day". Drawing the last known
@@ -362,6 +548,7 @@ async function startApp(session) {
   $('user-email').textContent = session.user.email;
   $('day').value = today();
   $('day').max = today(); // no positions exist in the future
+  updateDayButtons();
 
   if (!state.map) {
     state.map = L.map('map').setView([-25.43, -49.27], 11);
@@ -445,11 +632,9 @@ $('login-form').addEventListener('submit', async (e) => {
 
 $('logout').addEventListener('click', () => db.auth.signOut());
 $('show-all').addEventListener('click', showAll);
-$('day').addEventListener('change', () => {
-  if (!$('day').value || $('day').value > today()) $('day').value = today();
-  const d = state.devices.find((x) => x.id === state.selectedId);
-  if (d) drawDayOrReport(d);
-});
+$('day').addEventListener('change', onDayChanged);
+$('day-prev').addEventListener('click', () => shiftDay(-1));
+$('day-next').addEventListener('click', () => shiftDay(1));
 
 db.auth.onAuthStateChange((_event, session) => {
   if (session) startApp(session);

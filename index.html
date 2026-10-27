@@ -9,7 +9,7 @@
   <title>Rastreamento Ruffino</title>
   <link rel="icon" type="image/svg+xml" href="logo-ruffino.svg">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="styles.css?v=eb847a2">
+  <link rel="stylesheet" href="styles.css?v=683311d">
 </head>
 <body>
   <section id="login" class="login" hidden>
@@ -58,15 +58,26 @@
     <main class="main">
       <div id="toolbar" class="toolbar" hidden>
         <strong id="selected-name"></strong>
-        <label>Dia <input id="day" type="date"></label>
+        <span class="day-picker">
+          <button id="day-prev" type="button" class="step-button" aria-label="Dia anterior">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg>
+          </button>
+          <input id="day" type="date" aria-label="Dia">
+          <button id="day-next" type="button" class="step-button" aria-label="Próximo dia">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3 5 5-5 5"/></svg>
+          </button>
+        </span>
         <span id="day-summary" class="muted" aria-live="polite"></span>
       </div>
-      <div class="map-wrap">
+      <div id="day-view" class="day-view">
+        <ol id="timeline" class="timeline" aria-label="Linha do tempo do dia" hidden></ol>
+        <div class="map-wrap">
         <div id="map" class="map"></div>
         <div id="map-notice" class="map-notice" role="status" hidden>
           <strong id="map-notice-title"></strong>
           <p id="map-notice-text"></p>
           <button id="map-notice-action" type="button" class="secondary" hidden></button>
+        </div>
         </div>
       </div>
     </main>
@@ -74,7 +85,8 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js"></script>
-  <script src="config.js?v=eb847a2"></script>
-  <script src="app.js?v=eb847a2"></script>
+  <script src="config.js?v=683311d"></script>
+  <script src="stops.js?v=683311d"></script>
+  <script src="app.js?v=683311d"></script>
 </body>
 </html>

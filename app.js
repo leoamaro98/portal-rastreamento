@@ -232,9 +232,11 @@ async function startApp(session) {
 
   if (!state.map) {
     state.map = L.map('map').setView([-25.43, -49.27], 11);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    // OSM's tile policy requires the attribution and a Referer (origin is enough).
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
-      attribution: '&copy; OpenStreetMap',
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      referrerPolicy: 'strict-origin-when-cross-origin',
     }).addTo(state.map);
   }
   // The map container was hidden until now; Leaflet needs to measure it again.

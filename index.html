@@ -3,8 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <!-- GitHub Pages ignores _headers, so the referrer rule also lives here. -->
-  <meta name="referrer" content="no-referrer">
+  <!-- GitHub Pages ignores _headers, so the referrer rule also lives here. Origin only:
+       OpenStreetMap blocks tile requests from web pages that send no Referer at all. -->
+  <meta name="referrer" content="strict-origin-when-cross-origin">
   <title>Rastreamento Ruffino</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="styles.css">

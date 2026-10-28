@@ -667,16 +667,20 @@ async function startApp(session) {
   // The map container was hidden until now; Leaflet needs to measure it again.
   setTimeout(() => state.map.invalidateSize(), 0);
 
-  // Anyone in the company's tenant can sign in; without this check someone not yet
-  // released would just see an empty list and think the data is missing.
-  const { data: allowed, error: accessError } = await db.rpc('is_portal_user');
-  if (accessError || !allowed) {
+  // Anyone in the company's tenant can sign in; only registered, active users get data.
+  // register_access also records the visit (refused ones too) for the admins. Without
+  // the explicit message someone not yet released would think the data is missing.
+  const { data: access, error: accessError } = await db.rpc('register_access');
+  if (accessError || !access?.allowed) {
     $('devices-status').hidden = false;
     $('devices-status').textContent = accessError
       ? `Erro ao verificar o acesso: ${accessError.message}`
-      : `O usuário ${session.user.email} ainda não tem acesso. Peça a liberação ao responsável pelo portal.`;
+      : `O usuário ${session.user.email} ainda não tem acesso. Peça a liberação a um administrador do portal.`;
     return;
   }
+  if (access.name) $('user-email').textContent = access.name;
+  $('user-email').title = session.user.email;
+  $('admin-toggle').hidden = !access.admin;
 
   try {
     await loadDevices();
@@ -690,6 +694,8 @@ async function startApp(session) {
 
 function showLogin() {
   clearInterval(state.refreshTimer);
+  $('admin-toggle').hidden = true;
+  if (!$('admin').hidden) openAdmin(false);
   $('app').hidden = true;
   $('login').hidden = false;
 }
@@ -743,7 +749,18 @@ $('day-prev').addEventListener('click', () => shiftDay(-1));
 $('day-next').addEventListener('click', () => shiftDay(1));
 $('day-today').addEventListener('click', goToToday);
 
+// Auth fires for the initial session, every token refresh and when the tab regains
+// focus; the portal starts once per signed-in user, so a visit is logged once and the
+// screen is not rebuilt under the director's hands.
+let startedFor = null;
 db.auth.onAuthStateChange((_event, session) => {
-  if (session) startApp(session);
-  else showLogin();
+  if (!session) {
+    startedFor = null;
+    showLogin();
+    return;
+  }
+  if (session.user.id === startedFor) return;
+  startedFor = session.user.id;
+  // Supabase recommends not awaiting other auth-client calls inside this callback.
+  setTimeout(() => startApp(session), 0);
 });

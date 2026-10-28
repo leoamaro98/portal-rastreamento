@@ -9,7 +9,7 @@
   <title>Rastreamento Ruffino</title>
   <link rel="icon" type="image/svg+xml" href="logo-ruffino.svg">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="styles.css?v=c164814">
+  <link rel="stylesheet" href="styles.css?v=864c1de">
 </head>
 <body>
   <section id="login" class="login" hidden>
@@ -36,10 +36,60 @@
       </span>
       <span class="topbar-right">
         <span id="collector-status" class="collector-status" role="status"></span>
+        <button id="admin-toggle" class="secondary admin-toggle" type="button" hidden>Administração</button>
         <span id="user-email" class="muted"></span>
         <button id="logout" class="link-button" type="button">Sair</button>
       </span>
     </header>
+
+    <section id="admin" class="admin" hidden aria-labelledby="admin-title">
+      <div class="admin-head">
+        <h2 id="admin-title">Usuários com acesso</h2>
+        <button id="user-add" type="button">Adicionar usuário</button>
+      </div>
+      <p class="muted admin-intro">Só quem está cadastrado e ativo entra no portal, com a conta Microsoft da Ruffino.
+        Administradores também gerenciam esta lista.</p>
+
+      <form id="user-form" class="user-form" hidden novalidate>
+        <h3 id="user-form-title">Adicionar usuário</h3>
+        <label>Nome <input id="user-name" type="text" autocomplete="off" required></label>
+        <label>E-mail <input id="user-email-input" type="email" autocomplete="off" placeholder="nome@ruffinoacabamentos.com" required></label>
+        <label>Perfil
+          <select id="user-role">
+            <option value="viewer">Visualizador: vê o portal</option>
+            <option value="admin">Administrador: vê e gerencia usuários</option>
+          </select>
+        </label>
+        <p id="user-form-hint" class="muted small" hidden></p>
+        <p id="user-form-error" class="error" role="alert" hidden></p>
+        <div class="form-actions">
+          <button id="user-save" type="submit">Salvar</button>
+          <button id="user-cancel" type="button" class="secondary">Cancelar</button>
+        </div>
+      </form>
+
+      <p id="admin-status" class="muted" role="status"></p>
+      <div class="table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Situação</th><th>Último acesso</th><th><span class="sr-only">Ações</span></th></tr>
+          </thead>
+          <tbody id="users-body"></tbody>
+        </table>
+      </div>
+
+      <h2 class="admin-section">Histórico de alterações</h2>
+      <ol id="changes-list" class="log-list"></ol>
+
+      <h2 class="admin-section">Acessos ao portal</h2>
+      <p class="muted small">Inclui tentativas de quem não tem permissão.</p>
+      <div class="table-wrap">
+        <table class="admin-table">
+          <thead><tr><th>Quando</th><th>Quem</th><th>Resultado</th></tr></thead>
+          <tbody id="access-body"></tbody>
+        </table>
+      </div>
+    </section>
 
     <aside class="sidebar">
       <div class="sidebar-head">
@@ -87,8 +137,9 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js"></script>
-  <script src="config.js?v=c164814"></script>
-  <script src="stops.js?v=c164814"></script>
-  <script src="app.js?v=c164814"></script>
+  <script src="config.js?v=864c1de"></script>
+  <script src="stops.js?v=864c1de"></script>
+  <script src="app.js?v=864c1de"></script>
+  <script src="admin.js?v=864c1de"></script>
 </body>
 </html>

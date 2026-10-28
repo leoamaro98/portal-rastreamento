@@ -171,7 +171,10 @@ input {
 .toolbar label { display: flex; gap: 6px; align-items: center; font-size: 14px; }
 .toolbar .error-text { color: var(--danger); }
 
-.day-picker { display: inline-flex; align-items: center; gap: 4px; }
+.day-picker { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.range-field { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--muted); }
+.today-button { padding: 6px 12px; }
+.today-button:hover { background: var(--accent-tint); }
 .step-button {
   display: inline-grid;
   place-items: center;
@@ -232,6 +235,20 @@ input {
 .stop-what, .stop-where { display: block; font-size: 12px; color: var(--muted); }
 .stop-where { margin-top: 2px; }
 .timeline-end { padding: 6px 8px 0 44px; font-size: 12px; color: var(--muted); }
+/* Day headers when the timeline spans several days. More room above than below. */
+.timeline-day {
+  margin: 14px 0 2px;
+  padding: 0 8px 6px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.timeline-day:first-child { margin-top: 0; }
+.timeline-day span { font-weight: 400; color: var(--muted); }
+.timeline-day.empty { color: var(--muted); font-weight: 400; border-bottom-style: dashed; }
 
 /* Numbered map markers that mirror the timeline badges. */
 .stop-icon span {

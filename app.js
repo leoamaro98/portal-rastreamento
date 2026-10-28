@@ -28,6 +28,7 @@ const state = {
   drawSeq: 0,
   stopMarkers: [],    // map markers, same order as the timeline
   activeStop: null,
+  rangeClipped: false, // the chosen period was cut to MAX_RANGE_DAYS
 };
 
 // ---------- formatting ----------
@@ -140,18 +141,75 @@ function renderCollectorStatus(lastRun, lastOk) {
   status.textContent = `Coleta às ${timeFmt.format(startedAt)} · próxima ~${timeFmt.format(next)}`;
 }
 
-async function loadDay(deviceId, day) {
-  const from = new Date(`${day}T00:00:00${BRASILIA_OFFSET}`);
-  const to = new Date(from.getTime() + 24 * 60 * 60 * 1000);
-  const { data, error } = await db
-    .from('positions')
-    .select('fix_time, latitude, longitude, provider')
-    .eq('device_id', deviceId)
-    .gte('fix_time', from.toISOString())
-    .lt('fix_time', to.toISOString())
-    .order('fix_time');
-  if (error) throw error;
-  return data;
+// The API returns at most 1000 rows per request; a month of one phone reporting every
+// 15 min is ~3000, so the range is read page by page.
+const PAGE_SIZE = 1000;
+
+async function loadRange(deviceId, fromDay, toDay) {
+  const from = new Date(`${fromDay}T00:00:00${BRASILIA_OFFSET}`);
+  const to = new Date(new Date(`${toDay}T00:00:00${BRASILIA_OFFSET}`).getTime() + DAY_MS);
+  const rows = [];
+  for (let offset = 0; ; offset += PAGE_SIZE) {
+    const { data, error } = await db
+      .from('positions')
+      .select('fix_time, latitude, longitude, provider')
+      .eq('device_id', deviceId)
+      .gte('fix_time', from.toISOString())
+      .lt('fix_time', to.toISOString())
+      .order('fix_time')
+      .range(offset, offset + PAGE_SIZE - 1);
+    if (error) throw error;
+    rows.push(...data);
+    if (data.length < PAGE_SIZE) return rows;
+  }
+}
+
+// ---------- period (De / Até) ----------
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MAX_RANGE_DAYS = 31;
+
+function addDays(day, delta) {
+  const [y, m, d] = day.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + delta)).toISOString().slice(0, 10);
+}
+
+function daysBetween(fromDay, toDay) {
+  return Math.round((Date.parse(`${toDay}T00:00:00Z`) - Date.parse(`${fromDay}T00:00:00Z`)) / DAY_MS) + 1;
+}
+
+function listDays(fromDay, toDay) {
+  const days = [];
+  for (let day = fromDay; day <= toDay; day = addDays(day, 1)) days.push(day);
+  return days;
+}
+
+// Reads the two fields and makes them coherent (order, no future, at most 31 days).
+// Returns { from, to, clipped }.
+function readRange() {
+  const now = today();
+  let from = $('day').value || now;
+  let to = $('day-to').value || from;
+  if (to > now) to = now;
+  if (from > now) from = now;
+  if (from > to) [from, to] = [to, from];
+  // Remembered until the next draw reports it: the fields are fixed in place here, so a
+  // second read would no longer see that the period was cut.
+  if (daysBetween(from, to) > MAX_RANGE_DAYS) {
+    from = addDays(to, -(MAX_RANGE_DAYS - 1));
+    state.rangeClipped = true;
+  }
+  const clipped = state.rangeClipped;
+  $('day').value = from;
+  $('day-to').value = to;
+  $('day-to').min = from;
+  $('day-next').disabled = to >= now;
+  $('day-today').disabled = from === now && to === now;
+  return { from, to, clipped };
+}
+
+function rangeIncludesToday() {
+  return $('day-to').value === today();
 }
 
 // ---------- rendering ----------
@@ -266,34 +324,47 @@ async function drawDayOrReport(d, options) {
 // popping a popup over what the director is looking at.
 async function drawDay(d, { keepView = false } = {}) {
   const seq = ++state.drawSeq;
-  const day = $('day').value;
+  const { from, to, clipped } = readRange();
+  state.rangeClipped = false;
   if (!keepView) setSummary('Carregando…');
-  const positions = await loadDay(d.id, day);
+  const positions = await loadRange(d.id, from, to);
   if (seq !== state.drawSeq) return;
   clearMap();
   hideNotice();
 
   if (positions.length === 0) {
     hideTimeline();
-    drawEmptyDay(d, day);
+    drawEmptyDay(d, from, to);
     return;
   }
 
-  const stops = window.Stops.buildStops(positions);
+  // Stops are built per day: a phone left in the same place overnight is two days at
+  // that place, not one 20-hour stop.
+  const byDay = new Map(listDays(from, to).map((day) => [day, []]));
+  for (const p of positions) byDay.get(dayFmt.format(new Date(p.fix_time)))?.push(p);
+  const days = [...byDay].map(([day, list]) => ({ day, stops: window.Stops.buildStops(list) }));
+  const stops = days.flatMap((x) => x.stops);
+
   const keepActive = keepView && state.activeStop !== null && state.activeStop < stops.length - 1
     ? state.activeStop
     : stops.length - 1;
-  renderTimeline(d, stops);
-  drawStopsOnMap(d, stops);
+  renderTimeline(d, days);
+  drawStopsOnMap(d, days);
   selectStop(keepActive, { pan: false });
   if (!keepView) fit(stops.map((s) => [s.latitude, s.longitude]));
 
-  const first = timeFmt.format(new Date(stops[0].from));
-  const lastTime = timeFmt.format(new Date(stops[stops.length - 1].to));
-  const km = Math.round(window.Stops.totalDistanceM(stops) / 1000);
-  setSummary(stops.length === 1
-    ? `1 local · ${first === lastTime ? first : `${first} → ${lastTime}`}`
-    : `${stops.length} locais · ${first} → ${lastTime} · ~${km} km em linha reta`);
+  const km = Math.round(days.reduce((sum, x) => sum + window.Stops.totalDistanceM(x.stops), 0) / 1000);
+  const note = clipped ? ` · período limitado a ${MAX_RANGE_DAYS} dias` : '';
+  if (days.length === 1) {
+    const first = timeFmt.format(new Date(stops[0].from));
+    const lastTime = timeFmt.format(new Date(stops[stops.length - 1].to));
+    setSummary(stops.length === 1
+      ? `1 local · ${first === lastTime ? first : `${first} → ${lastTime}`}${note}`
+      : `${stops.length} locais · ${first} → ${lastTime} · ~${km} km em linha reta${note}`);
+  } else {
+    const withData = days.filter((x) => x.stops.length).length;
+    setSummary(`${withData} de ${days.length} dias com posições · ${stops.length} ${stops.length === 1 ? 'local' : 'locais'} · ~${km} km em linha reta${note}`);
+  }
 }
 
 // ---------- timeline ----------
@@ -326,25 +397,40 @@ function describeStop(stop, index) {
   return { time, what };
 }
 
-function renderTimeline(d, stops) {
+// days: [{ day, stops }] in order. Numbering runs across the whole period so each
+// number on the map is unique; "Início do dia" restarts every day.
+function renderTimeline(d, days) {
   const list = $('timeline');
   list.replaceChildren();
-  stops.forEach((stop, i) => {
-    const { time, what } = describeStop(stop, i);
-    const where = el('span', { className: 'stop-where' }, 'Buscando endereço…');
-    const button = el('button', { type: 'button', className: 'stop' },
-      el('span', { className: 'stop-badge', ariaHidden: 'true' }, String(i + 1)),
-      el('span', {},
-        el('span', { className: 'stop-time' }, time),
-        el('span', { className: 'stop-what' }, what),
-        where),
-    );
-    button.addEventListener('click', () => selectStop(i, { pan: true }));
-    list.append(el('li', {}, button));
-    fillAddress(where, stop);
-  });
-  const lastAt = timeFmt.format(new Date(stops[stops.length - 1].to));
-  list.append(el('li', { className: 'timeline-end' }, `Sem posições depois de ${lastAt}`));
+  const multiDay = days.length > 1;
+  let n = 0;
+  for (const { day, stops } of days) {
+    if (multiDay) {
+      const count = stops.length ? `${stops.length} ${stops.length === 1 ? 'local' : 'locais'}` : 'sem posições';
+      list.append(el('li', { className: `timeline-day${stops.length ? '' : ' empty'}` },
+        dayLabel(day), el('span', {}, count)));
+    }
+    stops.forEach((stop, i) => {
+      const index = n++;
+      const { time, what } = describeStop(stop, i);
+      const where = el('span', { className: 'stop-where' }, 'Buscando endereço…');
+      const button = el('button', { type: 'button', className: 'stop' },
+        el('span', { className: 'stop-badge', ariaHidden: 'true' }, String(index + 1)),
+        el('span', {},
+          el('span', { className: 'stop-time' }, time),
+          el('span', { className: 'stop-what' }, what),
+          where),
+      );
+      button.addEventListener('click', () => selectStop(index, { pan: true }));
+      list.append(el('li', {}, button));
+      fillAddress(where, stop);
+    });
+  }
+  if (!multiDay) {
+    const stops = days[0].stops;
+    const lastAt = timeFmt.format(new Date(stops[stops.length - 1].to));
+    list.append(el('li', { className: 'timeline-end' }, `Sem posições depois de ${lastAt}`));
+  }
   list.hidden = false;
   $('day-view').classList.add('with-timeline');
   setTimeout(() => state.map.invalidateSize(), 0);
@@ -361,23 +447,31 @@ function hideTimeline() {
 
 // Straight dashed lines: with fixes minutes apart the real route is unknown, and a solid
 // line would suggest one.
-function drawStopsOnMap(d, stops) {
-  const points = stops.map((s) => [s.latitude, s.longitude]);
-  if (points.length > 1) {
-    L.polyline(points, { color: '#66727f', weight: 2, opacity: 0.8, dashArray: '6 6' }).addTo(state.layer);
+// One dashed line per day: nothing was recorded between one day's last fix and the
+// next day's first, so they are not joined.
+function drawStopsOnMap(d, days) {
+  state.stopMarkers = [];
+  let n = 0;
+  for (const { stops } of days) {
+    const points = stops.map((s) => [s.latitude, s.longitude]);
+    if (points.length > 1) {
+      L.polyline(points, { color: '#66727f', weight: 2, opacity: 0.8, dashArray: '6 6' }).addTo(state.layer);
+    }
+    stops.forEach((stop, i) => {
+      const index = n++;
+      const { time } = describeStop(stop, i);
+      const label = days.length > 1 ? `${dateTimeFmt.format(new Date(stop.from)).slice(0, 5)} ${time}` : time;
+      const marker = L.marker(points[i], {
+        icon: L.divIcon({ className: 'stop-icon', html: `<span>${index + 1}</span>`, iconSize: [26, 26], iconAnchor: [13, 13] }),
+        keyboard: false, // the timeline buttons are the keyboard path
+        title: `${index + 1} · ${label}`,
+      })
+        .bindPopup(() => popupContent(d, { ...stop, fix_time: stop.to, provider: null }, label))
+        .on('click', () => selectStop(index, { pan: false, scroll: true }))
+        .addTo(state.layer);
+      state.stopMarkers.push(marker);
+    });
   }
-  state.stopMarkers = stops.map((stop, i) => {
-    const { time } = describeStop(stop, i);
-    const marker = L.marker(points[i], {
-      icon: L.divIcon({ className: 'stop-icon', html: `<span>${i + 1}</span>`, iconSize: [26, 26], iconAnchor: [13, 13] }),
-      keyboard: false, // the timeline buttons are the keyboard path
-      title: `${i + 1} · ${time}`,
-    })
-      .bindPopup(() => popupContent(d, { ...stop, fix_time: stop.to, provider: null }, time))
-      .on('click', () => selectStop(i, { pan: false, scroll: true }))
-      .addTo(state.layer);
-    return marker;
-  });
 }
 
 function selectStop(index, { pan = false, scroll = false } = {}) {
@@ -463,21 +557,25 @@ async function fillAddress(span, stop) {
 
 // ---------- day navigation ----------
 
-function shiftDay(delta) {
-  const [y, m, dd] = $('day').value.split('-').map(Number);
-  const next = new Date(Date.UTC(y, m - 1, dd + delta)).toISOString().slice(0, 10);
-  if (next > today()) return;
-  $('day').value = next;
+// The arrows move the whole period by its own length: a week steps a week.
+function shiftDay(direction) {
+  const { from, to } = readRange();
+  const span = daysBetween(from, to);
+  const nextFrom = addDays(from, direction * span);
+  if (nextFrom > today()) return;
+  $('day').value = nextFrom;
+  $('day-to').value = addDays(to, direction * span);
   onDayChanged();
 }
 
-function updateDayButtons() {
-  $('day-next').disabled = $('day').value >= today();
+function goToToday() {
+  $('day').value = today();
+  $('day-to').value = today();
+  onDayChanged();
 }
 
 function onDayChanged() {
-  if (!$('day').value || $('day').value > today()) $('day').value = today();
-  updateDayButtons();
+  readRange();
   const d = state.devices.find((x) => x.id === state.selectedId);
   if (d) drawDayOrReport(d);
 }
@@ -485,11 +583,15 @@ function onDayChanged() {
 // A day without positions must read as "no data for that day". Drawing the last known
 // fix as a normal pin would answer "was he there that day?" with a position from another
 // date, so it is only shown on request, hollow and labelled with its own date.
-function drawEmptyDay(d, day) {
-  const isToday = day === today();
-  setSummary(isToday ? 'Nenhuma posição hoje até agora' : 'Nenhuma posição neste dia');
+function drawEmptyDay(d, from, to) {
+  const single = from === to;
+  const isToday = single && from === today();
+  let title;
+  if (isToday) title = 'Nenhuma posição hoje até agora';
+  else if (single) title = `Nenhuma posição em ${dayLabel(from)}`;
+  else title = `Nenhuma posição de ${dayLabel(from)} a ${dayLabel(to)}`;
+  setSummary(isToday ? title : single ? 'Nenhuma posição neste dia' : 'Nenhuma posição no período');
 
-  const title = isToday ? 'Nenhuma posição hoje até agora' : `Nenhuma posição em ${dayLabel(day)}`;
   if (!d.latest) {
     showNotice(title, 'Este vendedor ainda não enviou nenhuma posição.');
     return;
@@ -515,7 +617,8 @@ function showLastKnown(d) {
     .bindPopup(() => popupContent(d, d.latest, 'Última posição conhecida'))
     .addTo(state.layer);
   fit([ll]);
-  setSummary(`Nenhuma posição neste dia · mostrando a última conhecida, de ${dateTimeFmt.format(latestAt)}`);
+  const where = $('day').value === $('day-to').value ? 'neste dia' : 'no período';
+  setSummary(`Nenhuma posição ${where} · mostrando a última conhecida, de ${dateTimeFmt.format(latestAt)}`);
 }
 
 // ---------- session ----------
@@ -537,7 +640,7 @@ async function refresh() {
     return;
   }
   const d = state.devices.find((x) => x.id === state.selectedId);
-  if (d && $('day').value === today() && $('map-notice').hidden) {
+  if (d && rangeIncludesToday() && $('map-notice').hidden) {
     await drawDayOrReport(d, { keepView: true });
   }
 }
@@ -547,8 +650,10 @@ async function startApp(session) {
   $('app').hidden = false;
   $('user-email').textContent = session.user.email;
   $('day').value = today();
+  $('day-to').value = today();
   $('day').max = today(); // no positions exist in the future
-  updateDayButtons();
+  $('day-to').max = today();
+  readRange();
 
   if (!state.map) {
     state.map = L.map('map').setView([-25.43, -49.27], 11);
@@ -633,8 +738,10 @@ $('login-form').addEventListener('submit', async (e) => {
 $('logout').addEventListener('click', () => db.auth.signOut());
 $('show-all').addEventListener('click', showAll);
 $('day').addEventListener('change', onDayChanged);
+$('day-to').addEventListener('change', onDayChanged);
 $('day-prev').addEventListener('click', () => shiftDay(-1));
 $('day-next').addEventListener('click', () => shiftDay(1));
+$('day-today').addEventListener('click', goToToday);
 
 db.auth.onAuthStateChange((_event, session) => {
   if (session) startApp(session);

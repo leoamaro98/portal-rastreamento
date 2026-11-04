@@ -9,7 +9,7 @@
   <title>Rastreamento Ruffino</title>
   <link rel="icon" type="image/svg+xml" href="logo-ruffino.svg">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="styles.css?v=3205f97">
+  <link rel="stylesheet" href="styles.css?v=1c1712f">
 </head>
 <body>
   <section id="login" class="login" hidden>
@@ -97,9 +97,9 @@
         <button id="show-all" class="link-button" type="button">Ver todos no mapa</button>
       </div>
       <ul class="legend" aria-label="Legenda das cores">
-        <li><span class="dot fresh"></span>Localização atualizada</li>
-        <li><span class="dot stale"></span>Conectado, sem nova localização</li>
-        <li><span class="dot old"></span>Sem comunicação há mais de 3 h</li>
+        <li><span class="dot fresh"></span>Localização das últimas 3 h</li>
+        <li><span class="dot stale"></span>Conectado, sem localização há mais de 3 h</li>
+        <li><span class="dot old"></span>Sem comunicação há mais de 1 h</li>
       </ul>
       <p id="devices-status" class="muted" role="status">Carregando…</p>
       <ul id="device-list" class="device-list"></ul>
@@ -138,9 +138,9 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js"></script>
-  <script src="config.js?v=3205f97"></script>
-  <script src="stops.js?v=3205f97"></script>
-  <script src="app.js?v=3205f97"></script>
-  <script src="admin.js?v=3205f97"></script>
+  <script src="config.js?v=1c1712f"></script>
+  <script src="stops.js?v=1c1712f"></script>
+  <script src="app.js?v=1c1712f"></script>
+  <script src="admin.js?v=1c1712f"></script>
 </body>
 </html>

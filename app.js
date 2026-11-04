@@ -76,29 +76,30 @@ function sinceLabel(iso) {
 // Connection and location are separate facts. A phone can be talking to the MDM and
 // still have no new location (with the Passive provider it only gets one when another
 // app uses GPS), which must not read as "the portal stopped updating".
-// fresh   = location from the last two collection cycles
-// stale   = phone in contact with the MDM, but no new location
-// offline = no contact with the MDM for a while (off, no signal, no internet)
-const LOCATION_FRESH_MIN = 30;
-const CONTACT_OK_MIN = 3 * 60; // connected phones were seen checking in at least every ~2 h
+// Thresholds set by the client (2026-11-04), checked in this order:
+// old   = no contact with the MDM for more than 1 h (off, no signal, no internet)
+// stale = in contact, but the last location is more than 3 h old
+// fresh = in contact and located within the last 3 h
+const CONTACT_OK_MIN = 60;
+const LOCATION_FRESH_MIN = 3 * 60;
 
 function deviceStatus(d) {
   const fix = d.latest?.fix_time;
   const contact = d.last_contact_at;
+  if (!contact || minutesSince(contact) > CONTACT_OK_MIN) {
+    return {
+      kind: 'old',
+      text: contact ? `Sem comunicação ${ago(contact)}` : 'Sem comunicação registrada',
+      hint: 'O celular não fala com o MDM desde esse horário: pode estar desligado, sem sinal ou sem internet.',
+    };
+  }
   if (fix && minutesSince(fix) <= LOCATION_FRESH_MIN) {
     return { kind: 'fresh', text: `Localização atualizada · ${ago(fix)}` };
   }
-  if (contact && minutesSince(contact) <= CONTACT_OK_MIN) {
-    return {
-      kind: 'stale',
-      text: fix ? `Conectado · sem nova localização desde ${sinceLabel(fix)}` : 'Conectado · ainda sem localização',
-      hint: 'O celular está se comunicando com o MDM, mas não registrou uma nova localização desde esse horário.',
-    };
-  }
   return {
-    kind: 'old',
-    text: contact ? `Sem comunicação ${ago(contact)}` : 'Sem comunicação registrada',
-    hint: 'O celular não fala com o MDM desde esse horário: pode estar desligado, sem sinal ou sem internet.',
+    kind: 'stale',
+    text: fix ? `Conectado · sem nova localização desde ${sinceLabel(fix)}` : 'Conectado · ainda sem localização',
+    hint: 'O celular está se comunicando com o MDM, mas não registrou uma nova localização desde esse horário.',
   };
 }
 

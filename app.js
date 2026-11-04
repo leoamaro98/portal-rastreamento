@@ -62,14 +62,44 @@ function ago(iso) {
   return `há ${Math.floor(h / 24)} dia(s)`;
 }
 
-// Fresh = within two collection cycles; stale = today-ish; old = the phone stopped
-// reporting its position.
-function freshness(iso) {
-  if (!iso) return 'none';
-  const min = (Date.now() - new Date(iso).getTime()) / 60000;
-  if (min <= 30) return 'fresh';
-  if (min <= 24 * 60) return 'stale';
-  return 'old';
+const minutesSince = (iso) => (Date.now() - new Date(iso).getTime()) / 60000;
+
+// "hoje, 15:28" / "ontem, 15:28" / "03/11, 15:28".
+function sinceLabel(iso) {
+  const day = dayFmt.format(new Date(iso));
+  const time = timeFmt.format(new Date(iso));
+  if (day === today()) return `hoje, ${time}`;
+  if (day === addDays(today(), -1)) return `ontem, ${time}`;
+  return `${dateTimeFmt.format(new Date(iso)).slice(0, 5)}, ${time}`;
+}
+
+// Connection and location are separate facts. A phone can be talking to the MDM and
+// still have no new location (with the Passive provider it only gets one when another
+// app uses GPS), which must not read as "the portal stopped updating".
+// fresh   = location from the last two collection cycles
+// stale   = phone in contact with the MDM, but no new location
+// offline = no contact with the MDM for a while (off, no signal, no internet)
+const LOCATION_FRESH_MIN = 30;
+const CONTACT_OK_MIN = 3 * 60; // connected phones were seen checking in at least every ~2 h
+
+function deviceStatus(d) {
+  const fix = d.latest?.fix_time;
+  const contact = d.last_contact_at;
+  if (fix && minutesSince(fix) <= LOCATION_FRESH_MIN) {
+    return { kind: 'fresh', text: `Localização atualizada · ${ago(fix)}` };
+  }
+  if (contact && minutesSince(contact) <= CONTACT_OK_MIN) {
+    return {
+      kind: 'stale',
+      text: fix ? `Conectado · sem nova localização desde ${sinceLabel(fix)}` : 'Conectado · ainda sem localização',
+      hint: 'O celular está se comunicando com o MDM, mas não registrou uma nova localização desde esse horário.',
+    };
+  }
+  return {
+    kind: 'old',
+    text: contact ? `Sem comunicação ${ago(contact)}` : 'Sem comunicação registrada',
+    hint: 'O celular não fala com o MDM desde esse horário: pode estar desligado, sem sinal ou sem internet.',
+  };
 }
 
 // collaborator is a manual override in the database; normally the name comes from the
@@ -89,7 +119,7 @@ function el(tag, attrs = {}, ...children) {
 
 async function loadDevices() {
   const [devices, latest, runs, okRuns] = await Promise.all([
-    db.from('devices').select('id, model, imei, collaborator, mdm_tags, online_status, last_contact_at'),
+    db.from('devices').select('id, model, imei, collaborator, mdm_tags, online_status, last_contact_at, battery_percent, battery_at'),
     db.from('latest_positions').select('device_id, fix_time, latitude, longitude, provider'),
     db.from('collector_runs').select('started_at, error').order('id', { ascending: false }).limit(1),
     db.from('collector_runs').select('finished_at')
@@ -221,11 +251,19 @@ function renderList() {
   $('devices-status').textContent = 'Nenhum aparelho coletado ainda.';
 
   for (const d of state.devices) {
-    const fix = d.latest?.fix_time;
+    const status = deviceStatus(d);
+    const contact = d.last_contact_at ? `Contato ${ago(d.last_contact_at)}` : 'Sem contato registrado';
+    // Android tends to throttle GPS on low battery, so a low level is worth flagging.
+    const battery = d.battery_percent === null || d.battery_percent === undefined
+      ? null
+      : el('span', {
+        className: d.battery_percent <= 20 ? 'battery battery-low' : 'battery',
+        title: d.battery_at ? `Bateria lida ${sinceLabel(d.battery_at)}` : '',
+      }, `Bateria ${d.battery_percent}%`);
     const btn = el('button', { type: 'button', className: `device${d.id === state.selectedId ? ' selected' : ''}` },
-      el('span', { className: 'device-name' }, el('span', { className: `dot ${freshness(fix)}` }), deviceName(d)),
-      el('span', { className: 'device-meta' },
-        fix ? `Posição ${ago(fix)} · ${dateTimeFmt.format(new Date(fix))}` : 'Sem posição reportada'),
+      el('span', { className: 'device-name' }, el('span', { className: `dot ${status.kind}` }), deviceName(d)),
+      el('span', { className: `device-status ${status.kind}`, title: status.hint || '' }, status.text),
+      el('span', { className: 'device-meta' }, contact, battery ? ' · ' : null, battery),
       el('span', { className: 'device-meta' },
         [d.model, d.imei && `IMEI final ${d.imei.slice(-4)}`, `ID ${d.id}`].filter(Boolean).join(' · ')),
     );

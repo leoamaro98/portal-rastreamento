@@ -152,6 +152,10 @@ input {
 .device.selected { border-color: var(--accent); background: var(--accent-tint); }
 .device-name { font-weight: 600; display: flex; align-items: center; gap: 8px; }
 .device-meta { font-size: 12px; color: var(--muted); }
+.device-status { font-size: 13px; color: var(--text); }
+.device-status.stale, .device-status.old { color: var(--muted); }
+.battery { font-variant-numeric: tabular-nums; }
+.battery-low { color: var(--danger); font-weight: 600; }
 
 .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--muted); }
 .dot.fresh { background: var(--fresh); }

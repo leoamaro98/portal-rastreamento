@@ -253,19 +253,12 @@ function renderList() {
   for (const d of state.devices) {
     const status = deviceStatus(d);
     const contact = d.last_contact_at ? `Contato ${ago(d.last_contact_at)}` : 'Sem contato registrado';
-    // Android tends to throttle GPS on low battery, so a low level is worth flagging.
-    const battery = d.battery_percent === null || d.battery_percent === undefined
-      ? null
-      : el('span', {
-        className: d.battery_percent <= 20 ? 'battery battery-low' : 'battery',
-        title: d.battery_at ? `Bateria lida ${sinceLabel(d.battery_at)}` : '',
-      }, `Bateria ${d.battery_percent}%`);
+    // The card stays short (who, situation, last contact); battery and hardware details
+    // live in the selected salesperson's view.
     const btn = el('button', { type: 'button', className: `device${d.id === state.selectedId ? ' selected' : ''}` },
       el('span', { className: 'device-name' }, el('span', { className: `dot ${status.kind}` }), deviceName(d)),
       el('span', { className: `device-status ${status.kind}`, title: status.hint || '' }, status.text),
-      el('span', { className: 'device-meta' }, contact, battery ? ' · ' : null, battery),
-      el('span', { className: 'device-meta' },
-        [d.model, d.imei && `IMEI final ${d.imei.slice(-4)}`, `ID ${d.id}`].filter(Boolean).join(' · ')),
+      el('span', { className: 'device-meta' }, contact),
     );
     btn.addEventListener('click', () => selectDevice(d.id));
     list.append(el('li', {}, btn));
@@ -346,7 +339,28 @@ async function selectDevice(id) {
   const d = state.devices.find((x) => x.id === id);
   $('toolbar').hidden = false;
   $('selected-name').textContent = deviceName(d);
+  renderDeviceDetails(d);
   await drawDayOrReport(d);
+}
+
+// Battery and hardware of the selected phone, kept out of the list cards.
+function renderDeviceDetails(d) {
+  const items = [];
+  if (d.battery_percent !== null && d.battery_percent !== undefined) {
+    // Android tends to throttle GPS on low battery, so a low level is worth flagging.
+    const value = el('dd', { className: d.battery_percent <= 20 ? 'battery battery-low' : 'battery' },
+      `${d.battery_percent}%`, d.battery_at ? el('span', { className: 'muted' }, ` · lida ${sinceLabel(d.battery_at)}`) : null);
+    items.push(['Bateria', value]);
+  }
+  items.push(['Último contato', d.last_contact_at ? `${ago(d.last_contact_at)} (${sinceLabel(d.last_contact_at)})` : 'nenhum registrado']);
+  if (d.model) items.push(['Modelo', d.model]);
+  if (d.imei) items.push(['IMEI', d.imei]);
+  items.push(['ID no MDM', String(d.id)]);
+
+  const list = $('device-details');
+  list.replaceChildren(...items.map(([label, value]) => el('div', {},
+    el('dt', {}, label),
+    value instanceof HTMLElement ? value : el('dd', {}, value))));
 }
 
 async function drawDayOrReport(d, options) {
@@ -678,6 +692,7 @@ async function refresh() {
     return;
   }
   const d = state.devices.find((x) => x.id === state.selectedId);
+  if (d) renderDeviceDetails(d);
   if (d && rangeIncludesToday() && $('map-notice').hidden) {
     await drawDayOrReport(d, { keepView: true });
   }

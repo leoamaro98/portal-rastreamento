@@ -6,6 +6,9 @@
   // Phones report with ~10–50 m of jitter; anything within this radius of where the
   // stop began counts as "still there".
   const STOP_RADIUS_M = 150;
+  // Farthest a lone fix may stray from a stop and still count as jitter when the next
+  // fix comes back (indoor nights showed 150–600 m wobble).
+  const WOBBLE_MAX_M = 500;
 
   function distanceM(a, b) {
     const R = 6371000;
@@ -21,12 +24,19 @@
   // Returns [{ latitude, longitude, from, to, count, fromPreviousM }].
   function buildStops(positions) {
     const stops = [];
-    for (const p of positions) {
+    positions.forEach((p, i) => {
       const current = stops[stops.length - 1];
-      if (current && distanceM(current, p) <= STOP_RADIUS_M) {
+      const next = positions[i + 1];
+      // A single fix just outside the radius whose next fix is back inside is indoor
+      // jitter, not a departure (Marlom 10/11: 151 m out at 00:54, 67 m back at 01:29;
+      // anchoring a new stop on it split one night at home into three).
+      // Capped: a fix far away and back is a real trip or a misreading (splitOutliers).
+      const wobble = current && next && distanceM(current, p) <= WOBBLE_MAX_M
+        && distanceM(current, next) <= STOP_RADIUS_M;
+      if (current && (distanceM(current, p) <= STOP_RADIUS_M || wobble)) {
         current.to = p.fix_time;
         current.count += 1;
-        continue;
+        return;
       }
       stops.push({
         latitude: p.latitude,
@@ -36,7 +46,7 @@
         count: 1,
         fromPreviousM: current ? distanceM(current, p) : null,
       });
-    }
+    });
     return stops;
   }
 

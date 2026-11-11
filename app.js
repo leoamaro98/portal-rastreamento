@@ -29,6 +29,7 @@ const state = {
   stopMarkers: [],    // map markers, same order as the timeline
   activeStop: null,
   rangeClipped: false, // the chosen period was cut to MAX_RANGE_DAYS
+  showOutliers: false, // draw the misreadings that splitOutliers hid
 };
 
 // ---------- formatting ----------
@@ -391,10 +392,14 @@ async function drawDay(d, { keepView = false } = {}) {
     return;
   }
 
+  // Indoor misreadings ("hotel → 16 km away → hotel") are left out of the timeline, the
+  // stops and the km; they stay in the database and can be shown on request.
+  const { kept, outliers } = window.Stops.splitOutliers(positions);
+
   // Stops are built per day: a phone left in the same place overnight is two days at
   // that place, not one 20-hour stop.
   const byDay = new Map(listDays(from, to).map((day) => [day, []]));
-  for (const p of positions) byDay.get(dayFmt.format(new Date(p.fix_time)))?.push(p);
+  for (const p of kept) byDay.get(dayFmt.format(new Date(p.fix_time)))?.push(p);
   const days = [...byDay].map(([day, list]) => ({ day, stops: window.Stops.buildStops(list) }));
   const stops = days.flatMap((x) => x.stops);
 
@@ -404,7 +409,9 @@ async function drawDay(d, { keepView = false } = {}) {
   renderTimeline(d, days);
   drawStopsOnMap(d, days);
   selectStop(keepActive, { pan: false });
+  if (state.showOutliers) drawOutliers(d, outliers);
   if (!keepView) fit(stops.map((s) => [s.latitude, s.longitude]));
+  renderOutliersToggle(outliers.length);
 
   const km = Math.round(days.reduce((sum, x) => sum + window.Stops.totalDistanceM(x.stops), 0) / 1000);
   const note = clipped ? ` · período limitado a ${MAX_RANGE_DAYS} dias` : '';
@@ -418,6 +425,35 @@ async function drawDay(d, { keepView = false } = {}) {
     const withData = days.filter((x) => x.stops.length).length;
     setSummary(`${withData} de ${days.length} dias com posições · ${stops.length} ${stops.length === 1 ? 'local' : 'locais'} · ~${km} km em linha reta${note}`);
   }
+}
+
+// Hidden misreadings, drawn only on request: small hollow grey dots, outside the
+// numbered sequence, so nobody takes them for a place the person went.
+function drawOutliers(d, outliers) {
+  for (const p of outliers) {
+    L.circleMarker([p.latitude, p.longitude], {
+      radius: 6, color: '#8a929b', weight: 2, fillColor: '#ffffff', fillOpacity: 1, dashArray: '3 2',
+    })
+      .bindTooltip(`Imprecisa · ${dateTimeFmt.format(new Date(p.fix_time)).slice(0, 12)}`, { direction: 'top' })
+      .bindPopup(() => popupContent(d, p, 'Posição imprecisa (provável erro de leitura)'))
+      .addTo(state.layer);
+  }
+}
+
+function renderOutliersToggle(count) {
+  const button = $('outliers-toggle');
+  button.hidden = count === 0;
+  if (!count) return;
+  const noun = count === 1 ? 'posição imprecisa oculta' : 'posições imprecisas ocultas';
+  button.textContent = state.showOutliers
+    ? `Ocultar ${count} ${count === 1 ? 'posição imprecisa' : 'posições imprecisas'}`
+    : `${count} ${noun} · mostrar`;
+}
+
+function toggleOutliers() {
+  state.showOutliers = !state.showOutliers;
+  const d = state.devices.find((x) => x.id === state.selectedId);
+  if (d) drawDayOrReport(d, { keepView: true });
 }
 
 // ---------- timeline ----------
@@ -490,6 +526,7 @@ function renderTimeline(d, days) {
 }
 
 function hideTimeline() {
+  $('outliers-toggle').hidden = true;
   $('timeline').hidden = true;
   $('timeline').replaceChildren();
   $('day-view').classList.remove('with-timeline');
@@ -802,6 +839,7 @@ $('day-to').addEventListener('change', onDayChanged);
 $('day-prev').addEventListener('click', () => shiftDay(-1));
 $('day-next').addEventListener('click', () => shiftDay(1));
 $('day-today').addEventListener('click', goToToday);
+$('outliers-toggle').addEventListener('click', toggleOutliers);
 
 // Auth fires for the initial session, every token refresh and when the tab regains
 // focus; the portal starts once per signed-in user, so a visit is logged once and the

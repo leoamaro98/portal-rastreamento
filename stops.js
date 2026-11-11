@@ -44,7 +44,44 @@
     return stops.reduce((sum, s) => sum + (s.fromPreviousM || 0), 0);
   }
 
-  const api = { STOP_RADIUS_M, distanceM, buildStops, totalDistanceM };
+  // A phone indoors (home, hotel) loses the GPS fix and Android falls back to cell/Wi-Fi
+  // location, which can land kilometres away; the MDM still labels it "GPS". Seen on
+  // Marlom's nights in Nov/2026: "hotel → 16 km away → hotel" six minutes apart.
+  // A fix is treated as such a misreading when it jumps more than this from both of its
+  // neighbours...
+  const OUTLIER_MIN_JUMP_M = 1000;
+  // ...while the neighbours are much closer to each other than to it (it went out and
+  // came straight back). Relative, not a fixed radius, because the neighbours themselves
+  // carry indoor jitter of a few hundred metres.
+  const OUTLIER_RETURN_RATIO = 0.25;
+  // ...and only within a short window: with hours between the neighbours the person may
+  // really have gone there and back (real data had 4–16 h gaps doing exactly that).
+  const OUTLIER_MAX_SPAN_MS = 60 * 60 * 1000;
+
+  // positions: ordered by fix_time, the whole period (a misreading at 23:59 is judged
+  // against the fix after midnight). Each fix is judged against the original
+  // neighbours. Returns { kept, outliers }, both in the original order.
+  function splitOutliers(positions) {
+    const kept = [];
+    const outliers = [];
+    positions.forEach((p, i) => {
+      const prev = positions[i - 1];
+      const next = positions[i + 1];
+      let outlier = false;
+      if (prev && next && new Date(next.fix_time) - new Date(prev.fix_time) <= OUTLIER_MAX_SPAN_MS) {
+        const out = distanceM(prev, p);
+        const back = distanceM(p, next);
+        outlier = out > OUTLIER_MIN_JUMP_M && back > OUTLIER_MIN_JUMP_M
+          && distanceM(prev, next) < OUTLIER_RETURN_RATIO * Math.min(out, back);
+      }
+      (outlier ? outliers : kept).push(p);
+    });
+    return { kept, outliers };
+  }
+
+  const api = {
+    STOP_RADIUS_M, OUTLIER_MIN_JUMP_M, distanceM, buildStops, totalDistanceM, splitOutliers,
+  };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.Stops = api;
 })(typeof window !== 'undefined' ? window : globalThis);

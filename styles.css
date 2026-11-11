@@ -189,6 +189,8 @@ input {
 }
 .toolbar label { display: flex; gap: 6px; align-items: center; font-size: 14px; }
 .toolbar .error-text { color: var(--danger); }
+/* Reads as a footnote of the summary right before it, not as a separate control. */
+.outliers-toggle { margin-left: -8px; font-size: 14px; }
 
 .day-picker { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .range-field { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--muted); }
